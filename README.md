@@ -9,7 +9,8 @@
 ### Backup: 
 Ensure you take a backup of the site on the Azure Portal before starting this exercise. This will provide a healthy backup version in case of any issues.
 
-### Unsupported Fields: The following fields are not supported and will be ignored if present in the configuration:
+### Unsupported Fields: 
+The following fields are not supported and will be ignored if present in the configuration:
 - build (not allowed)
 - depends_on (ignored)
 - networks (ignored)
