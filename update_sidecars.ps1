@@ -106,6 +106,9 @@ $services = @{}
 
 foreach ($serviceName in $dockerCompose.services.Keys) {
     $image = $dockerCompose.services[$serviceName].image
+    if ($image -notmatch "/") {
+        $image = "index.docker.io/$image"  # Prepend DockerHub FQDN if no registry is specified
+    }
     $isMain = $false
     $startUpCommand = $dockerCompose.services[$serviceName].startUpCommand
     if ($mainServiceName -and $serviceName -eq $mainServiceName) {
@@ -113,27 +116,28 @@ foreach ($serviceName in $dockerCompose.services.Keys) {
     }
 
     # Extract volume mounts from the configuration
+    $volumeMounts = @()
     if ($null -ne $dockerCompose.services[$serviceName].volumes) {
-       $volumeMounts = @($dockerCompose.services[$serviceName].volumes | ForEach-Object {
-		$volumeSubPath = $_.Split(':')[0]
-		$containerMountPath = $_.Split(':')[1]
-		if ($volumeSubPath -and $containerMountPath -and $volumeSubPath -notmatch '{WEBAPP_STORAGE_HOME}|{WEBSITES_ENABLED_APP_SERVICE_STORAGE}') {
-			@{
-				volumeSubPath = $volumeSubPath
-				containerMountPath = $containerMountPath
-				readOnly = $false
-				}
-			}
-		})
+        $volumeMounts = @($dockerCompose.services[$serviceName].volumes | ForEach-Object {
+            $volumeSubPath = $_.Split(':')[0]
+            $containerMountPath = $_.Split(':')[1]
+            if ($volumeSubPath -and $containerMountPath -and $volumeSubPath -notmatch '{WEBAPP_STORAGE_HOME}|{WEBSITES_ENABLED_APP_SERVICE_STORAGE}') {
+                @{
+                    volumeSubPath = $volumeSubPath
+                    containerMountPath = $containerMountPath
+                    readOnly = $false
+                }
+            }
+        })
+    }
 
-		# Store service details in the hashtable
-		$services[$serviceName] = @{
-			image = if ($image) { $image } else { "" }
-            startUpCommand = if ($startUpCommand) { $startUpCommand } else { "" }
-			isMain = if ($isMain) { $isMain } else { $false }
-			volumeMounts = if ($volumeMounts) { $volumeMounts } else { @() }
-			targetPort = if ($isMain -and $targetPort) { $targetPort } else { "" }
-		}
+    # Store service details in the hashtable
+    $services[$serviceName] = @{
+        image = if ($image) { $image } else { "" }
+        startUpCommand = if ($startUpCommand) { $startUpCommand } else { "" }
+        isMain = if ($isMain) { $isMain } else { $false }
+        volumeMounts = $volumeMounts
+        targetPort = if ($isMain -and $targetPort) { $targetPort } else { "" }
     }
 }
 
@@ -297,8 +301,24 @@ az webapp sitecontainers create `
 
 # Update linuxFxVersion to sitecontainers
 Write-Output "`nUpdating linuxFxVersion to sitecontainers for the staging slot..."
-az webapp config set --resource-group $resourceGroup --name $webAppName --slot staging --linux-fx-version "sitecontainers"
+$retryCount = 0
+$maxRetries = 3
+do {
+    az webapp config set --resource-group $resourceGroup --name $webAppName --slot staging --linux-fx-version "sitecontainers"
+    Start-Sleep -Seconds 5
+    $currentLinuxFxVersion = az webapp config show --resource-group $resourceGroup --name $webAppName --slot staging --query "linuxFxVersion" --output tsv
+    if ($currentLinuxFxVersion -eq "sitecontainers") {
+        Write-Output "`nSuccessfully updated linuxFxVersion to sitecontainers."
+        break
+    }
+    $retryCount++
+    Write-Output "`nRetrying to update linuxFxVersion... Attempt $retryCount of $maxRetries."
+} while ($retryCount -lt $maxRetries)
 
+if ($currentLinuxFxVersion -ne "sitecontainers") {
+    Write-Output "`nFailed to update linuxFxVersion to sitecontainers after $maxRetries attempts."
+    exit 1
+}
 
 # Clean up the temporary JSON file
 Remove-Item -Path $tempSpecFilePath -Force
